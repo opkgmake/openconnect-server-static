@@ -2,9 +2,9 @@
 FROM alpine:latest AS builder
 
 ENV	OCSERV_VERSION="1.3.0" \
-	GNUTLS_VERSION="3.8.6" \
-	LIBSECCOMP_VERSION="2.5.5" \
-	LZ4_VERSION="1.9.4"
+	GNUTLS_VERSION="3.8.10" \
+	LIBSECCOMP_VERSION="2.6.0" \
+	LZ4_VERSION="1.10.0"
 
 #
 # assets
@@ -15,14 +15,17 @@ COPY --link ["scratchfs", "/scratchfs"]
 RUN	<<EOF
 
 set -x
-sed -i -r 's/v\d+\.\d+/edge/g' /etc/apk/repositories
+#sed -i -r 's/v\d+\.\d+/edge/g' /etc/apk/repositories
 apk update
 apk upgrade --no-interactive --latest
 apk add --no-cache \
 	brotli-dev \
 	brotli-static \
 	build-base \
+	clang \
 	curl \
+	gmp-dev \
+	gmp-static \
 	gnupg \
 	gperf \
 	libev-dev \
@@ -38,7 +41,6 @@ apk add --no-cache \
 	openssl \
 	readline-dev \
 	readline-static \
-	unbound \
 	xz \
 	zlib-dev \
 	zlib-static \
@@ -49,7 +51,8 @@ mkdir -p /usr/src
 cd /usr/src
 set -- \
 	1F42418905D8206AA754CCDC29EE58B996865171 \
-	5D46CB0F763405A7053556F47A75A648B3F9220C
+	5D46CB0F763405A7053556F47A75A648B3F9220C \
+	343C2FF0FBEE5EC2EDBEF399F3599FF828C67298
 gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys $@ || \
 gpg --batch --keyserver hkps://peegeepee.com --recv-keys $@ \
 gpg --yes --list-keys --fingerprint --with-colons | sed -E -n -e 's/^fpr:::::::::([0-9A-F]+):$/\1:6:/p' | gpg --import-ownertrust --yes
@@ -80,7 +83,6 @@ mkdir -p /usr/src/gnutls
 tar -xf /usr/src/gnutls-${GNUTLS_VERSION}.tar.xz -C /usr/src/gnutls --strip-components=1
 rm -f /usr/src/gnutls-${GNUTLS_VERSION}.tar.xz /usr/src/gnutls-${GNUTLS_VERSION}.tar.xz.sig
 cd /usr/src/gnutls
-unbound-anchor -a "/etc/unbound/root.key" ; true
 CFLAGS="-Wno-analyzer-fd-leak -Wno-analyzer-null-dereference -Wno-analyzer-use-of-uninitialized-value -Wno-type-limits -Wno-unused-macros -Wno-stringop-overflow" \
 ./configure \
 	--prefix=/usr \
@@ -91,13 +93,13 @@ CFLAGS="-Wno-analyzer-fd-leak -Wno-analyzer-null-dereference -Wno-analyzer-use-o
 	--without-p11-kit \
 	--without-tpm \
 	--without-tpm2 \
-	--disable-doc \
-	--disable-tools \
 	--disable-cxx \
-	--disable-tests \
-	--disable-nls \
+	--disable-doc \
+	--disable-gost \
 	--disable-libdane \
-	--disable-gost
+	--disable-tests \
+	--disable-tools \
+	--disable-nls
 make -j`nproc`
 make install-strip
 
@@ -112,6 +114,11 @@ cd /usr/src/lz4
 make -j`nproc` liblz4.a
 install lib/liblz4.a /usr/local/lib
 install lib/lz4*.h /usr/local/include
+
+EOF
+
+RUN	<<EOF
+set -x
 
 #
 # Download ocserv
@@ -133,6 +140,7 @@ LIBGNUTLS_LIBS="-lgnutls -lgmp -lnettle -lhogweed -lidn2 -lunistring" \
 LIBLZ4_CFLAGS="-I/usr/include" \
 LIBLZ4_LIBS="-L/usr/include -llz4" \
 CFLAGS="-Wno-type-limits" \
+LIBS="-lzstd -lz -lbrotlidec -lbrotlienc -lbrotlicommon" \
 LDFLAGS="-L/usr/local/lib -s -w -static" \
 ./configure \
 	--with-local-talloc \
@@ -153,7 +161,6 @@ file /usr/local/sbin/ocserv
 cp /usr/local/bin/oc* /scratchfs/usr/local/bin
 cp /usr/local/sbin/oc* /scratchfs/usr/local/sbin
 cp /etc/ssl/certs/ca-certificates.crt /scratchfs/etc/ssl/certs
-cp /etc/unbound/root.key /scratchfs/etc/unbound
 echo "test" | /usr/local/bin/ocpasswd --passwd=/scratchfs/etc/ocserv/ocserv.passwd test
 
 # Create self-signed certificate
